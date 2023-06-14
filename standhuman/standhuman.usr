@@ -1,0 +1,447 @@
+c-----------------------------------------------------------------------
+c  nek5000 user-file template
+c
+c  user specified routines:
+c     - uservp  : variable properties
+c     - userf   : local acceleration term for fluid
+c     - userq   : local source term for scalars
+c     - userbc  : boundary conditions
+c     - useric  : initial conditions
+c     - userchk : general purpose routine for checking errors etc.
+c     - userqtl : thermal divergence for lowMach number flows 
+c     - usrdat  : modify element vertices 
+c     - usrdat2 : modify mesh coordinates
+c     - usrdat3 : general purpose routine for initialization
+c     
+c-----------------------------------------------------------------------
+#define NPTS 7
+#define NPTS_MAX 9
+c-----------------------------------------------------------------------
+      subroutine uservp(ix,iy,iz,eg) ! set variable properties
+
+c      implicit none
+
+      integer ix,iy,iz,eg
+     
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      integer e
+c     e = gllel(eg)
+
+      udiff  = 0.0
+      utrans = 0.0
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userf(ix,iy,iz,eg) ! set acceleration term
+c
+c     Note: this is an acceleration term, NOT a force!
+c     Thus, ffx will subsequently be multiplied by rho(x,t).
+c
+c      implicit none
+
+      real gravity
+      common / simparams / gravity
+
+      integer ix,iy,iz,eg
+
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      integer e
+c     e = gllel(eg)
+
+      ffx = 0.0
+      ffy = temp*gravity/9.81
+      ffz = 0.0
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userq(ix,iy,iz,eg) ! set source term
+
+c      implicit none
+
+      integer ix,iy,iz,eg
+
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      integer e
+c     e = gllel(eg)
+
+      qvol = 0.0
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userbc(ix,iy,iz,iside,eg) ! set up boundary conditions
+c
+c     NOTE ::: This subroutine MAY NOT be called by every process
+c
+c      implicit none
+
+      integer ix,iy,iz,iside,eg
+
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      real temp_av,co2_av,vmouth
+      common / my_bc / temp_av,co2_av,vmouth
+
+      if (ifield .eq. 2) then
+        temp = temp_av
+      elseif (ifield .eq. 3) then
+        temp = co2_av
+      endif
+
+ccccccccccccccccccccccccccccccccccccccccc
+c     Discriminating between mouth and vent
+      a_mouth = 0.1
+      a_vent = 2.0
+      if (x .lt. 14.) then
+        ux = vmouth
+      else
+        ux = vmouth*a_mouth/a_vent
+      endif
+
+      uy = 0.0
+      uz = 0.0
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine useric(ix,iy,iz,eg) ! set up initial conditions
+
+c      implicit none
+
+      integer ix,iy,iz,eg
+
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      ux   = 0.0
+      uy   = 0.0
+      uz   = 0.0
+      ! Temperature and CO2 of the room are initially at zero 
+      temp = 0.0
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userchk()
+
+c      implicit none
+
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      real temp_av,co2_av,vmouth
+      common / my_bc / temp_av,co2_av,vmouth
+
+      real gravity,T_head,T_body,l_scale,v_scale,t_scale,t_brstart
+      common/simparams/gravity,T_head,T_body,l_scale,v_scale,t_scale
+      common / tb / t_brstart
+
+      real temp_pts(NPTS), co2_pts(NPTS)
+      real, dimension(ldim,NPTS_MAX) :: ave
+      common / probes / ave
+
+      tout = 3.0115
+      ttotal = 4.00047
+      tin = ttotal-tout
+c Dimensional time the human has spent breathing from t = t_brstart
+      treal = (time-t_brstart)*t_scale
+c Dimensional time of where you are in the breathing cycle
+      t_brcycle = mod(treal,ttotal)
+
+c evaluate temperature and CO2 for list of points in ave array
+c 'n' is the number of points
+      call find_val(temp_pts, co2_pts, ave, NPTS)
+      temp_av = (temp_pts(1) + temp_pts(2) + temp_pts(3))/3.0
+      co2_av = (co2_pts(1) + co2_pts(2) + co2_pts(3))/3.0
+
+      if (nio .eq. 0) then
+        write (6,*) 'temp_av:       ', time, t_brcycle, temp_av
+        write (6,*) 'co2_av:        ', time, t_brcycle, co2_av
+
+        write (6,*) 'temp_mouth:    ', time, t_brcycle, temp_pts(4)
+        write (6,*) 'co2_mouth:     ', time, t_brcycle, co2_pts(4)
+
+        write (6,*) 'temp_chin:     ', time, t_brcycle, temp_pts(5)
+        write (6,*) 'co2_chin:      ', time, t_brcycle, co2_pts(5)
+
+        write (6,*) 'temp_forehead: ', time, t_brcycle, temp_pts(6)
+        write (6,*) 'co2_forehead:  ', time, t_brcycle, co2_pts(6)
+
+        write (6,*) 'temp_backhead: ', time, t_brcycle, temp_pts(7)
+        write (6,*) 'co2_backhead:  ', time, t_brcycle, co2_pts(7)
+
+        write (6,*) 'vmouth:        ', time, t_brcycle, vmouth
+
+      endif
+
+      if (time .ge. t_brstart) then
+
+        if (t_brcycle .le. tout) then           ! Breathing Out branch
+          vmouth = 0.600331*sin(0.9292*t_brcycle+0.4)
+        else                                     ! Breathing In Branch
+          vmouth = 24.167*t_brcycle**4 - 338.33*t_brcycle**3
+     +           + 1777.4*t_brcycle**2 - 4152.7*t_brcycle + 3638.99566
+        endif
+        vmouth = vmouth/v_scale           ! Non-dimensionalize velocity
+
+        if (vmouth .ge. 0.0) then
+          temp_av = 1.0
+          co2_av = 1.0
+        endif
+
+      else
+
+        vmouth = 0.0
+        temp_av = T_head
+        co2_av = 0.0
+
+      endif
+
+c     put temperature and CO2 clipping here  
+      n = nx1*ny1*nz1*nelt
+      do i=1,n  
+        if(t(i,1,1,1,1).lt.0.0)  t(i,1,1,1,1)=0.0
+        if(t(i,1,1,1,1).gt.1.0)  t(i,1,1,1,1)=1.0 
+        if(t(i,1,1,1,2).lt.0.0)  t(i,1,1,1,2)=0.0
+        if(t(i,1,1,1,2).gt.1.0)  t(i,1,1,1,2)=1.0 
+      end do
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userqtl ! Set thermal divergence
+
+      call userqtl_scig 
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine usrdat()   ! This routine to modify element vertices
+
+c      implicit none
+
+      include 'SIZE'
+      include 'TOTAL'
+
+      integer ie,iside
+      real tempa
+ 
+      parameter (lbc=10) ! Maximum number of bc types
+      character*3 f2tbc(2,lbc)
+
+c  Change "SY " BC's to "SYM"
+      do ie=1,nelv
+        do iside=1,2*ldim
+
+          ! Velocity Boundary Conditions
+          if(cbc(iside,ie,1).eq."SY ") then
+            cbc(iside,ie,1) = "SYM"
+          endif
+          
+        enddo
+      enddo
+
+      f2tbc(1,1) = 'W  '   ! Any 'W  ' bc is swapped to ft2bc(2,1)
+      f2tbc(2,1) = 'I  '
+
+c     Human surfaces are defined as SYM to differentiate between T and I        
+      f2tbc(1,2) = 'SYM'   ! Any 'SYM' bc is swapped to ft2bc(2,1)
+      f2tbc(2,2) = 'T  '
+      
+      f2tbc(1,3) = 'v  '   ! Any 'v  ' bc is swapped to ft2bc(2,2)
+      f2tbc(2,3) = 't  '
+
+      f2tbc(1,4) = 'O  '   ! Any 'O  ' bc is swapped to ft2bc(2,2)
+      f2tbc(2,4) = 'O  '
+
+      nbc = 4      ! Number of boundary condition pairings (e.g., W-->t)
+      call add_temp(f2tbc,nbc,2)
+      param(8) = 0.865*param(8) ! Peclet number of 0.865*Re 
+      
+      do ie=1,nelv              !loop over all elements on the local MPI rank
+        do iside=1,2*ldim                 !loop over all sides on the element
+          ! Velocity Boundary Conditions
+          if(cbc(iside,ie,1).eq."SYM") then !Change SYM's to wall.
+            cbc(iside,ie,1) = "W  "
+          endif
+
+          if(cbc(iside,ie,1) .eq. "O  ") then 
+            cbc(iside,ie,1) = "v  "
+          endif
+
+        enddo
+      enddo
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine usrdat2()  ! This routine to modify mesh coordinates
+
+c      implicit none
+
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE' 
+
+      real gravity,T_head,T_body,l_scale,v_scale,t_scale,t_brstart
+      common/simparams/gravity,T_head,T_body,l_scale,v_scale,t_scale
+      common / tb / t_brstart
+      
+      co2_ambient = param(108)
+      gravity = param(109)
+
+      T_ambient = param(110)
+      T_head = param(111)
+      T_body = param(112)
+      T_breath = 37.0
+      
+      T_head = (T_head - T_ambient)/(T_breath-T_ambient)
+      T_body = (T_body - T_ambient)/(T_breath-T_ambient)
+      T_ambient = 0.0
+      T_breath = 1.0
+
+      l_scale = param(113)
+      v_scale = param(114)
+      t_brstart	= param(115)
+      t_scale = l_scale/v_scale
+
+      print *, 'usrdat2(), l_scale', l_scale
+      print *, 'usrdat2(), t_scale', t_scale
+      print *, 'usrdat2(), v_scale', v_scale
+      print *, 'usrdat2(), t_brstart', t_brstart
+
+      tempa = 1.0 ! Max temperature
+      
+      do ie=1,nelv              !loop over all elements on the local MPI rank
+        do iside=1,2*ldim                 !loop over all sides on the element
+         ! Body Surface Temperature Boundary Conditions
+          if(cbc(iside,ie,2) .eq. "T  ") then !Assign T value to human surface
+            call facind (i0,i1,j0,j1,k0,k1,lx1,ly1,lz1,iside)
+            yl = ym1(i0,j0,k0,ie) 
+            yu = ym1(i1,j1,k1,ie)
+            ymid = ( yl+yu ) / 2.0
+            if (ymid .gt. 8.9) then
+              tempa = T_head
+            else
+              tempa = T_body
+            endif
+            print *, ymid, tempa, ' ymid, tempa'
+            bc(1,iside,ie,2) = tempa
+          endif
+        enddo
+      enddo
+
+c     call gen_rea_full(0) ! Print respective .rea file with new BCs
+      return
+      end
+c-----------------------------------------------------------------------
+
+      subroutine usrdat3()
+
+c      implicit none
+
+      include 'SIZE'
+      include 'TOTAL'
+
+c     Create array of probes for averaging
+      real ave(ldim,NPTS_MAX)
+      common / probes / ave
+
+c Probes for average temp and CO2 data
+      ave(1,1) = .776
+      ave(2,1) = 9.275
+      ave(1,2) = .776
+      ave(2,2) = 9.300
+      ave(1,3) = .776
+      ave(2,3) = 9.325
+c Probe at mouth for temp and CO2 data
+      ave(1,4) = .775
+      ave(2,4) = 9.300
+c Probe at chin
+      ave(1,5) = 0.77
+      ave(2,5) = 9.08
+c Probe at forehead
+      ave(1,6) = 0.7
+      ave(2,6) = 10.2
+c Probe at back of the head
+      ave(1,7) = -0.6
+      ave(2,7) = 9.8
+
+      return
+      end
+
+c-----------------------------------------------------------------------
+
+      subroutine find_val(temp_pts, co2_pts, xyz, n) 
+c     evaluate temperature and CO2 for list of points xyz 
+c     'n' is the number of points
+
+      include 'SIZE'
+      include 'TOTAL'
+
+      integer n
+      real temp_pts(n),co2_pts(n),xyz(ldim,n)
+
+      real rwk(NPTS_MAX,ldim+1)     ! r, s, t, dist2
+      integer iwk(NPTS_MAX,3)       ! code, proc, else
+      save rwk,iwk
+
+      integer intp_h
+      save intp_h
+
+      common /rwk_intp/
+     $       fwrk(lx1*ly1*lz1*lelt,ldim),
+     $       fpts(ldim*NPTS_MAX),         ! ldim here is NFLDS
+     $       pts(ldim*NPTS_MAX)           ! ldim here is actually ldim
+     
+      integer icalla
+      save    icalla
+      data    icalla /0/
+
+      ntot = nx1*ny1*nz1*nelt
+      if (n.gt.NPTS_MAX) call exitti ('Increase NPTS or decrease n')
+      if (nelgt.ne.nelgv) call exitti ('nelgt must equal nelgv')
+
+      ! Remember to define pts
+      do i=1,n
+        pts(i)    = xyz(1,i)
+        pts(i+n)  = xyz(2,i)
+        if (if3d) pts(i + n*2) = xyz(3,i)
+      enddo
+     
+      ! interp_setup is called only once
+      if (icalla.eq.0) then
+        icalla = 1
+        call interp_setup(intp_h,0.0,0,nelt)
+      endif
+
+c pack working array, NELV and NELT are assumed to be the same
+      call opcopy(fwrk(1,1),fwrk(1,2),fwrk(1,3),t,t(1,1,1,1,2),vz)
+
+c interpolate the fields
+      call interp_nfld(fpts,fwrk,ldim,pts(1),pts(n+1),pts(2*n+1),
+     $                         n,iwk,rwk,NPTS_MAX,.true.,intp_h)
+
+      do i=1,n 
+        temp_pts(i) = fpts(i)
+        co2_pts(i) = fpts(i+n)
+      enddo
+
+      return
+      end
+c------------------------------------------------------------------------------
